@@ -1,0 +1,144 @@
+// ================= 双超声波全功能版 =================
+// 1. HC-SR04 (左边) + PING))) (中间) 同时工作
+// 2. 取两者最小距离：任何一个小于 40cm 即报警
+// 3. PIR 和 IR 也能独立触发报警
+
+#define TRIG_PIN  10    // HC-SR04 Trig
+#define ECHO_PIN  9     // HC-SR04 Echo
+#define PING_PIN  8     // PING))) Signal Pin
+
+#define PIR_PIN   12    
+#define IR_PIN    7     
+
+#define BUTTON_PIN 13   
+#define BUZZER_PIN 3    
+#define MOTOR_PIN  11   
+
+#define RED_PIN   4     
+#define GREEN_PIN 5     
+#define BLUE_PIN  6     
+
+const int DIST_RED_START = 40;  // 报警距离
+
+bool armed = false;            
+int lastButtonState = HIGH;    
+unsigned long lastSensorTime = 0;
+
+void setup() {
+  Serial.begin(9600); 
+  pinMode(TRIG_PIN, OUTPUT); pinMode(ECHO_PIN, INPUT);
+  pinMode(PING_PIN, OUTPUT); 
+  pinMode(PIR_PIN, INPUT);   pinMode(IR_PIN, INPUT);    
+  pinMode(BUTTON_PIN, INPUT_PULLUP);    
+  pinMode(BUZZER_PIN, OUTPUT); pinMode(MOTOR_PIN, OUTPUT);
+  pinMode(RED_PIN, OUTPUT);  pinMode(GREEN_PIN, OUTPUT); pinMode(BLUE_PIN, OUTPUT);
+
+  setColor(0, 0, 255); delay(500); setAllOff();
+  Serial.println(">>> SYSTEM READY: DUAL ULTRASONIC MODE <<<");
+}
+
+void loop() {
+  // 1. 按钮逻辑
+  int reading = digitalRead(BUTTON_PIN);
+  if (reading != lastButtonState) {
+    if (reading == LOW) toggleSystem();
+    delay(50);
+  }
+  lastButtonState = reading;
+
+  // 2. 传感器检测 (每100ms检测一次，提高反应速度)
+  if (armed) {
+    if (millis() - lastSensorTime > 100) { 
+      runSensors();
+      lastSensorTime = millis();
+    }
+  }
+}
+
+void toggleSystem() {
+  armed = !armed;
+  if (armed) {
+    Serial.println(">>> ARMED <<<"); setLevel(0); 
+  } else {
+    Serial.println(">>> DISARMED <<<"); setAllOff(); 
+  }
+}
+
+// === 核心逻辑：读取两个超声波 ===
+void runSensors() {
+  int pir = digitalRead(PIR_PIN); 
+  int ir  = digitalRead(IR_PIN);  
+  
+  // 1. 读取 HC-SR04 (左边)
+  float d1 = getDistHC();
+  if (d1 <= 0) d1 = 400;
+
+  // 2. 读取 PING))) (中间)
+  float d2 = getDistPING();
+  if (d2 <= 0) d2 = 400;
+
+  // 3. 取最小值 (谁近听谁的)
+  float finalDist = min(d1, d2);
+  
+  // 串口打印：让你看清是哪个超声波在测距
+  // 格式：[HC: 距离 | PING: 距离]
+  Serial.print("[HC:"); Serial.print(d1);
+  Serial.print("cm | PING:"); Serial.print(d2);
+  Serial.print("cm] ");
+  
+  if (pir == HIGH) Serial.print(" PIR:ON");
+  if (ir == HIGH) Serial.print(" IR:ON");
+  Serial.println(); // 换行
+
+  // --- 报警判断 ---
+  // 触发条件：距离<40 或 PIR有人 或 IR触发
+  if (finalDist <= DIST_RED_START || pir == HIGH || ir == HIGH) { 
+    setLevel(2); // 🔴 报警 + 关门
+  } else {
+    setLevel(0); // 🟢 安全
+  }
+}
+
+// 读取 HC-SR04
+float getDistHC() {
+  digitalWrite(TRIG_PIN, LOW); delayMicroseconds(2);
+  digitalWrite(TRIG_PIN, HIGH); delayMicroseconds(10);
+  digitalWrite(TRIG_PIN, LOW);
+  long t = pulseIn(ECHO_PIN, HIGH); 
+  if (t == 0) return 400; 
+  return t * 0.034 / 2.0;
+}
+
+// 读取 PING))) (修正版)
+float getDistPING() {
+  // 先发信号
+  pinMode(PING_PIN, OUTPUT);
+  digitalWrite(PING_PIN, LOW); delayMicroseconds(2);
+  digitalWrite(PING_PIN, HIGH); delayMicroseconds(5);
+  digitalWrite(PING_PIN, LOW);
+  
+  // 再收信号
+  pinMode(PING_PIN, INPUT);
+  long t = pulseIn(PING_PIN, HIGH);
+  if (t == 0) return 400;
+  return t * 0.034 / 2.0;
+}
+
+void setLevel(int level) {
+  static int lastLevel = -1;
+  if (level == 0) { 
+    if(lastLevel!=0) { setColor(0, 255, 0); noTone(BUZZER_PIN); digitalWrite(MOTOR_PIN, LOW); }
+  }
+  else if (level == 2) { 
+    if(lastLevel!=2) { setColor(255, 0, 0); tone(BUZZER_PIN, 2000); digitalWrite(MOTOR_PIN, HIGH); }
+  }
+  lastLevel = level;
+}
+
+void setColor(int r, int g, int b) {
+  analogWrite(RED_PIN, r); analogWrite(GREEN_PIN, g); analogWrite(BLUE_PIN, b);
+}
+
+void setAllOff() {
+  setColor(0,0,0); noTone(BUZZER_PIN); digitalWrite(MOTOR_PIN, LOW);
+}
